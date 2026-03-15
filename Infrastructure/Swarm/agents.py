@@ -1,75 +1,73 @@
 import os
-from google import genai
-from google.genai import types
+from google.adk.agents.llm_agent import Agent
 
-def get_gemini_client():
-    # Attempt to pull from environment or default
-    api_key = os.environ.get("GEMINI_API_KEY", "mock_key")
-    return genai.Client(api_key=api_key)
-
-class DomainAgent:
+class DomainAgent(Agent):
     """
-    Muscle Agent: Rapid extraction and domain-specific conversation logic.
-    Utilizes flash-lite for speed.
+    Muscle Agent built natively on the google-adk Agent class.
+    Handles rapid extraction and domain-specific conversation logic.
     """
-    def __init__(self, agent_id: int, name: str, system_prompt: str, model_id: str = "gemini-3.1-flash-lite-preview"):
-        self.agent_id = agent_id
-        self.name = name
-        self.system_prompt = system_prompt
-        self.model_id = model_id
-        self._client = get_gemini_client()
+    # Because ADK Agents are typically Pydantic models themselves, we declare fields
+    agent_id: int
 
-    def generate_response(self, user_input: str, history: list = None) -> str:
+    def __init__(self, agent_id: int, name: str, system_prompt: str, model_id: str = "gemini-3.1-flash-lite-preview", **kwargs):
+        super().__init__(
+            agent_id=agent_id,
+            model=model_id,
+            name=name,
+            instruction=system_prompt,
+            description=f"Handles questions and tasks related to {name}.",
+            **kwargs
+        )
+
+    async def generate_response(self, user_input: str, history: list = None) -> str:
         """
-        Generates a response using the Gemini API.
-        In a real scenario, `history` would be converted into a native Gemini format.
+        Executes the ADK Agent asynchronously.
         """
-        # We simulate the call if the API key is mock, or make a real call if available
-        if os.environ.get("GEMINI_API_KEY", "mock_key") == "mock_key":
+        # Prioritize GEMINI_API_KEY if testing live routing, fallback to GOOGLE_API_KEY
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "mock_key")
+        if api_key == "mock_key":
             return f"[MOCK {self.name}] Acknowledged: '{user_input}'. Please elaborate."
 
-        # Real call using the new google-genai 0.3.0 SDK syntax
-        contents = []
-        if history:
-             for msg in history:
-                 role = 'user' if msg.role == 'user' else 'model'
-                 contents.append(types.Content(role=role, parts=[types.Part.from_text(msg.content)]))
+        # Execute using ADK's native async run method
+        response_stream = self.run_async(prompt=user_input)
 
-        contents.append(types.Content(role="user", parts=[types.Part.from_text(user_input)]))
+        response_text = ""
+        async for event in response_stream:
+            # ADK streams back events. We capture the model's text generation.
+            if hasattr(event, 'model_response') and event.model_response:
+                for part in event.model_response.parts:
+                    if part.text:
+                        response_text += part.text
 
-        config = types.GenerateContentConfig(
-            system_instruction=self.system_prompt,
-            temperature=1.0,
-        )
+        return response_text
 
-        response = self._client.models.generate_content(
-            model=self.model_id,
-            contents=contents,
-            config=config,
-        )
-        return response.text
 
-class GrandSynthesisAgent:
+class GrandSynthesisAgent(Agent):
     """
     Brain Agent: Deep synthesis and architecture generation.
     Utilizes pro for reasoning.
     """
     def __init__(self, model_id: str = "gemini-3.1-pro-preview"):
-        self.model_id = model_id
-        self._client = get_gemini_client()
+        super().__init__(
+            model=model_id,
+            name="grand_synthesis",
+            instruction="You are the Grand Synthesis Brain.",
+            description="Performs deep synthesis on the gathered session data."
+        )
 
-    def synthesize(self, session_data: str) -> str:
-        if os.environ.get("GEMINI_API_KEY", "mock_key") == "mock_key":
+    async def synthesize(self, session_data: str) -> str:
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "mock_key")
+        if api_key == "mock_key":
              return "[MOCK SYNTHESIS] Architecture specified based on all inputs."
 
         prompt = f"Synthesize the following session data into a final architectural specification:\n\n{session_data}"
-        config = types.GenerateContentConfig(
-            system_instruction="You are the Grand Synthesis Brain.",
-            temperature=1.0,
-        )
-        response = self._client.models.generate_content(
-            model=self.model_id,
-            contents=prompt,
-            config=config,
-        )
-        return response.text
+        response_stream = self.run_async(prompt=prompt)
+
+        response_text = ""
+        async for event in response_stream:
+            if hasattr(event, 'model_response') and event.model_response:
+                for part in event.model_response.parts:
+                    if part.text:
+                        response_text += part.text
+
+        return response_text
