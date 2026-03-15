@@ -1,6 +1,4 @@
-from .Memory import ContextCompiler
-from .Muscle import Muscle
-from .Brain import Brain
-from .Dispatcher import Dispatcher
+from Swarm.Memory import ContextCompiler
+from Swarm.Dispatcher import DispatcherFactory
 
-__all__ = ["ContextCompiler", "Muscle", "Brain", "Dispatcher"]
+__all__ = ["ContextCompiler", "DispatcherFactory", "MuscleFactory", "BrainFactory"]

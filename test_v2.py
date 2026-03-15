@@ -1,11 +1,11 @@
 import unittest
 import json
+import asyncio
 from Domain.Entities.InterviewSession import InterviewSession, Message
 from Infrastructure.Repositories.SQLiteSessionRepository import SQLiteSessionRepository
 from Swarm.Memory import ContextCompiler
-from Swarm.Dispatcher import Dispatcher
-from Swarm.Muscle import Muscle
-from Swarm.Brain import Brain
+from Swarm.Dispatcher import DispatcherFactory
+from google.adk.agents.llm_agent import Agent
 
 class TestV2Architecture(unittest.TestCase):
     def setUp(self):
@@ -18,7 +18,7 @@ class TestV2Architecture(unittest.TestCase):
         self.assertEqual(session.messages[0].content, "We are building an AI company.")
 
     def test_repository_save_and_find(self):
-        session = InterviewSession(id=0)  # Explicitly set ID to 0 for a new autoincrement
+        session = InterviewSession(id=0)
         session.add_message("founder", "Test DB.")
         self.repo.save(session)
 
@@ -29,15 +29,12 @@ class TestV2Architecture(unittest.TestCase):
 
         self.repo.delete(session.id)
 
-    def test_dispatcher_routing_logic(self):
-        mem = ContextCompiler()
-        dispatcher = Dispatcher(mem, Muscle(), Brain())
-
-        domain_need = dispatcher.decide_domain("Our customer base is growing.")
-        self.assertEqual(domain_need, "CustomerReality")
-
-        domain_need2 = dispatcher.decide_domain("The tech stack uses python.")
-        self.assertEqual(domain_need2, "Technical")
+    def test_adk_dispatcher_creation(self):
+        dispatcher = DispatcherFactory.create_swarm()
+        self.assertIsInstance(dispatcher, Agent)
+        self.assertEqual(dispatcher.name, "dispatcher_root")
+        self.assertEqual(len(dispatcher.sub_agents), 5)
+        self.assertEqual(dispatcher.sub_agents[-1].name, "brain_synthesizer")
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,52 +1,35 @@
-from Swarm.Muscle import Muscle
-from Swarm.Brain import Brain
-from Swarm.Memory import ContextCompiler
-from Domain.Entities.InterviewSession import InterviewSession
-import random
+from Swarm.Muscle import MuscleFactory
+from Swarm.Brain import BrainFactory
+from google.adk.agents.llm_agent import Agent
 
-class Dispatcher:
+class DispatcherFactory:
     """
     Dispatcher (The Swarm Router).
-    Replaces the static router.py. It acts as a semantic load-balancer.
+    Utilizes the ADK framework to define the root agent and manage sub-agents/tools.
     """
-    def __init__(self, memory: ContextCompiler, muscle: Muscle, brain: Brain):
-        self.memory = memory
-        self.muscle = muscle
-        self.brain = brain
+    @staticmethod
+    def create_swarm() -> Agent:
+        brand_muscle = MuscleFactory.create_muscle("BrandSpine")
+        customer_muscle = MuscleFactory.create_muscle("CustomerReality")
+        tech_muscle = MuscleFactory.create_muscle("Technical")
+        general_muscle = MuscleFactory.create_muscle("General")
 
-    def decide_domain(self, user_input: str) -> str:
-        """
-        Determines which domain (Brand Spine, Customer Reality, Technical, etc.)
-        needs to address the input.
-        In a full implementation, this uses a fast LLM call for semantic classification.
-        For this skeleton, we use lightweight heuristics to map the input.
-        """
-        user_input_lower = user_input.lower()
-        if any(w in user_input_lower for w in ['customer', 'user', 'client']):
-            return 'CustomerReality'
-        elif any(w in user_input_lower for w in ['brand', 'vision', 'mission']):
-            return 'BrandSpine'
-        elif any(w in user_input_lower for w in ['tech', 'stack', 'data', 'cloud']):
-            return 'Technical'
-        else:
-            return 'General'
+        brain = BrainFactory.create_brain()
 
-    def orient(self, session: InterviewSession, domain_need: str) -> str:
-        """Navigates the session's memory tree to load ONLY necessary context."""
-        return self.memory.retrieve_context(session, domain_need)
-
-    def route_task(self, session: InterviewSession, user_input: str, is_final: bool = False) -> str:
-        """
-        The central load-balancer logic.
-        """
-        if is_final:
-            # If the session is ending, route to the Brain for Synthesis
-            self.brain.synthesize(session)
-            session.complete_session()
-            return "Thank you for the session. I have synthesized your vision into the Architectural Specification."
-        else:
-            # For ongoing conversation, dispatch to a Domain Muscle
-            domain_need = self.decide_domain(user_input)
-            context = self.orient(session, domain_need)
-            next_question = self.muscle.act(session, domain_need, context, user_input)
-            return next_question
+        return Agent(
+            name="dispatcher_root",
+            model="gemini-3.1-flash-lite-preview",
+            description="The semantic load-balancer for the founder interview session.",
+            instruction=(
+                "You are the Swarm Dispatcher. Your job is to analyze the founder's input "
+                "and pass control to the correct Domain Agent (Muscle) to generate the next question. "
+                "If the session is explicitly marked as final, pass control to the brain_synthesizer."
+            ),
+            sub_agents=[
+                brand_muscle,
+                customer_muscle,
+                tech_muscle,
+                general_muscle,
+                brain
+            ]
+        )
