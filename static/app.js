@@ -149,7 +149,8 @@ async function selectSession(id, name) {
 }
 
 async function startNewSession() {
-    showStatus('Creating and initializing session...');
+    // Intentionally omitting showStatus() here to prevent the UI from vertically jumping
+    // when the "Creating and initializing session..." banner appears and disappears.
     try {
         const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({}) });
         currentSessionId = res.id;
@@ -163,14 +164,13 @@ async function startNewSession() {
         await loadSessions();
         await loadThread(1);
         await loadRoutingLogs();
-        hideStatus();
         
         if (initRes.agents && initRes.agents['1']) {
             displayResponse({
-                agent_id: 1, agent_name: 'Brand Spine', routing_reason: 'Session initialized', response: initRes.agents['1']
+                agent_id: 1, agent_name: 'brand_spine', routing_reason: 'Session initialized', response: initRes.agents['1']
             });
         }
-    } catch (err) { showError("Failed to create session"); hideStatus(); }
+    } catch (err) { showError("Failed to create session"); }
 }
 
 async function deleteSession(event, id) {
@@ -247,7 +247,14 @@ function displayResponse(result) {
     const agentId = result.agent_id || selectedAgentId;
     document.getElementById('routeIcon').textContent = AGENT_ICONS[agentId] || '🤖';
     document.getElementById('routeAgent').textContent = `Routed to: ${result.agent_name || 'Agent ' + agentId}`;
-    document.getElementById('routeReason').textContent = result.routing_reason || '';
+
+    const reasonEl = document.getElementById('routeReason');
+    if (result.routing_reason && result.routing_reason !== 'Session initialized') {
+        reasonEl.textContent = result.routing_reason;
+        reasonEl.style.display = 'block';
+    } else {
+        reasonEl.style.display = 'none';
+    }
 
     const parsed = parseAgentResponse(result.response || '');
     document.getElementById('nextQuestion').innerHTML = formatMarkdown(parsed.question || 'No specific question suggested.');

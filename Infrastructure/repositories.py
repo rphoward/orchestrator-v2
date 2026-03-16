@@ -90,21 +90,23 @@ class SQLiteSessionRepository(SessionRepository):
                     (session.name, session.updated_at, session.id)
                 )
 
-            # 2. Save Messages (Delete and replace to guarantee aggregate state matches memory)
-            cursor.execute("DELETE FROM conversations WHERE session_id = ?", (session.id,))
+            # 2. Save Messages (Incremental insert to preserve SQLite primary keys)
             for msg in session.messages:
-                cursor.execute(
-                    "INSERT INTO conversations (session_id, agent_id, role, content, message_type, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                    (session.id, msg.agent_id, msg.role, msg.content, msg.message_type, msg.timestamp)
-                )
+                if msg.id is None: # Only insert if it's a new message not yet persisted
+                    cursor.execute(
+                        "INSERT INTO conversations (session_id, agent_id, role, content, message_type, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                        (session.id, msg.agent_id, msg.role, msg.content, msg.message_type, msg.timestamp)
+                    )
+                    msg.id = cursor.lastrowid
 
-            # 3. Save Routing Logs
-            cursor.execute("DELETE FROM routing_logs WHERE session_id = ?", (session.id,))
+            # 3. Save Routing Logs (Incremental insert)
             for log in session.routing_logs:
-                cursor.execute(
-                    "INSERT INTO routing_logs (session_id, input_text, agent_id, agent_name, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                    (session.id, log.input_text, log.agent_id, log.agent_name, log.reason, log.timestamp)
-                )
+                if log.id is None:
+                    cursor.execute(
+                        "INSERT INTO routing_logs (session_id, input_text, agent_id, agent_name, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                        (session.id, log.input_text, log.agent_id, log.agent_name, log.reason, log.timestamp)
+                    )
+                    log.id = cursor.lastrowid
 
             conn.commit()
             return session
@@ -132,6 +134,7 @@ class SQLiteSessionRepository(SessionRepository):
             for m_row in msg_rows:
                 session.messages.append(
                     Message(
+                        id=m_row["id"],
                         agent_id=m_row["agent_id"],
                         role=m_row["role"],
                         content=m_row["content"],
@@ -145,6 +148,7 @@ class SQLiteSessionRepository(SessionRepository):
             for l_row in log_rows:
                 session.routing_logs.append(
                     RoutingLog(
+                        id=l_row["id"],
                         input_text=l_row["input_text"],
                         agent_id=l_row["agent_id"],
                         agent_name=l_row["agent_name"],
