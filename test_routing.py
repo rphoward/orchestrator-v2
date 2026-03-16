@@ -1,7 +1,7 @@
 import os
 import unittest
 from unittest.mock import patch, MagicMock
-from Domain.Session.aggregate import InterviewSession
+from Domain.interview_session import InterviewSession
 from Infrastructure.Swarm.agents import DomainAgent, GrandSynthesisAgent
 from Infrastructure.Swarm.dispatcher import SwarmDispatcher, RoutingDecision
 from google.genai import types
@@ -15,11 +15,27 @@ class TestSemanticDispatcher(unittest.IsolatedAsyncioTestCase):
 
         # 2. Setup Swarm Infrastructure (Muscle Agents)
         # Note: ADK agent names must be valid python identifiers (no spaces)
+        # Using a mock repository to simulate loading real prompts
+        from Infrastructure.repositories import SQLiteAgentRepository
+
+        self.repo = SQLiteAgentRepository()
+
+        # Ensure database is initialized before tests access the repo
+        from database import init_db, seed_agents
+        init_db()
+        seed_agents()
+
+        # We manually fetch the prompts from the actual prompts directory for the test
+        brand_prompt = self.repo.get_system_prompt_for_agent(1)
+        founder_prompt = self.repo.get_system_prompt_for_agent(2)
+        customer_prompt = self.repo.get_system_prompt_for_agent(3)
+        architecture_prompt = self.repo.get_system_prompt_for_agent(4)
+
         self.agents = {
-            1: DomainAgent(agent_id=1, name="brand_spine", system_prompt="You are Brand Spine."),
-            2: DomainAgent(agent_id=2, name="founder_invariants", system_prompt="You are Founder."),
-            3: DomainAgent(agent_id=3, name="customer_reality", system_prompt="You are Customer."),
-            4: DomainAgent(agent_id=4, name="architecture_translation", system_prompt="You are Architecture.")
+            1: DomainAgent(agent_id=1, name="brand_spine", system_prompt=brand_prompt),
+            2: DomainAgent(agent_id=2, name="founder_invariants", system_prompt=founder_prompt),
+            3: DomainAgent(agent_id=3, name="customer_reality", system_prompt=customer_prompt),
+            4: DomainAgent(agent_id=4, name="architecture_translation", system_prompt=architecture_prompt)
         }
 
         # 3. Setup Dispatcher
@@ -35,10 +51,14 @@ class TestSemanticDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.routing_logs[0].agent_id, 1) # Default mock fallback for 'brand'
         self.assertIn("MOCK brand_spine", response)
 
+    @patch('config.get_secure_api_key')
     @patch('google.genai.models.Models.generate_content')
-    async def test_semantic_routing_live_structured_output(self, mock_generate_content):
+    async def test_semantic_routing_live_structured_output(self, mock_generate_content, mock_get_key):
         # Set a fake API key to trigger the live LLM logic path instead of the mock fallback
-        os.environ["GEMINI_API_KEY"] = "fake_key_for_test"
+        mock_get_key.return_value = "fake_key_for_test"
+
+        # Tell dispatcher to bypass the string mock fallback
+        self.dispatcher._testing_live = True
 
         # Mock the LLM returning a structured JSON response saying it routed to Agent 3 (Customer)
         mock_routing_response = MagicMock()
@@ -72,9 +92,6 @@ class TestSemanticDispatcher(unittest.IsolatedAsyncioTestCase):
 
         # Verify that the generated response correctly came from the mocked Client using Agent 3
         self.assertIn("MOCK customer_reality", response)
-
-        # Cleanup
-        del os.environ["GEMINI_API_KEY"]
 
 if __name__ == '__main__':
     unittest.main()

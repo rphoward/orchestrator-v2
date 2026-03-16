@@ -1,9 +1,10 @@
 import os
 from typing import Dict, Any, Literal
 from pydantic import BaseModel, Field
-from Domain.Session.aggregate import InterviewSession
+from Domain.interview_session import InterviewSession
 from Infrastructure.Swarm.agents import DomainAgent, GrandSynthesisAgent
 from google.genai import types
+from config import get_secure_api_key
 
 class RoutingDecision(BaseModel):
     """Structured output expected from the Semantic Router."""
@@ -25,8 +26,8 @@ class SwarmDispatcher:
         # we will use the existing `genai` semantic structured output logic
         # to ensure deterministic mapping, but execute using ADK agents.
         from google import genai
-        # Prioritize GEMINI_API_KEY if testing live routing, fallback to GOOGLE_API_KEY
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "mock_key")
+        # Read API key explicitly and securely from the local .env to prevent terminal leakage
+        api_key = get_secure_api_key()
         self._client = genai.Client(api_key=api_key)
         self.routing_model = "gemini-3.1-flash-lite-preview"
 
@@ -76,7 +77,9 @@ class SwarmDispatcher:
         """
         Semantic Router powered by Gemini Structured Outputs.
         """
-        if os.environ.get("GEMINI_API_KEY", "mock_key") == "mock_key" and os.environ.get("GOOGLE_API_KEY", "mock_key") == "mock_key":
+        # If in a testing mock environment where the real model is patched, don't fallback to string matching
+        # Wait until the patched mock executes
+        if get_secure_api_key() == "mock_key" and not getattr(self, "_testing_live", False):
             lower_input = user_input.lower()
             if "founder" in lower_input or "personal" in lower_input:
                  return RoutingDecision(agent_id=2, reason="Mock routing: Founder keyword detected")
