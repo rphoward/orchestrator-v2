@@ -71,7 +71,13 @@ class SwarmDispatcher:
         session.add_message(agent_id=selected_agent_id, role="user", content=user_input)
         session.add_message(agent_id=selected_agent_id, role="assistant", content=response)
 
-        return response
+        # Return V1 API compatible dictionary
+        return {
+            "agent_id": selected_agent_id,
+            "agent_name": selected_agent.name,
+            "routing_reason": decision.reason,
+            "response": response
+        }
 
     def _route(self, user_input: str, history: list) -> RoutingDecision:
         """
@@ -123,11 +129,51 @@ class SwarmDispatcher:
         except Exception as e:
              return RoutingDecision(agent_id=1, reason=f"Fallback parsing error: {str(e)}")
 
-    async def finalize_session(self, session: InterviewSession) -> str:
-        data_dump = ""
-        for msg in session.messages:
-             data_dump += f"[{msg.role.upper()} - Agent {msg.agent_id}]: {msg.content}\n"
+    async def finalize_session(self, session: InterviewSession, force: bool = False) -> dict:
+        """
+        Triggers the Brain to perform Grand Synthesis on the session state.
+        Compatible with V1 API structure.
+        """
+        # 1. Pre-flight check
+        sparse_agents = []
+        for agent_id, agent in self.muscle_agents.items():
+             user_chats = [m for m in session.messages if m.agent_id == agent_id and m.role == "user"]
+             if len(user_chats) < 1:
+                  sparse_agents.append({"id": agent_id, "name": agent.name})
 
-        # Trigger the ADK Brain Agent
-        synthesis = await self.brain.synthesize(data_dump)
-        return synthesis
+        if sparse_agents and not force:
+             return {"status": "warning", "sparse_agents": sparse_agents}
+
+        # 2. Grand Synthesis Data Dump
+        payloads = {}
+        data_dump = ""
+        for agent_id, agent in self.muscle_agents.items():
+            agent_msgs = [m for m in session.messages if m.agent_id == agent_id]
+            if not agent_msgs:
+                 payloads[agent_id] = "No data gathered."
+                 continue
+
+            # Simple summary generation or data collection per agent
+            agent_payload = ""
+            for msg in agent_msgs:
+                 agent_payload += f"[{msg.role.upper()}]: {msg.content}\n"
+
+            payloads[agent_id] = agent_payload
+            data_dump += f"--- FROM {agent.name.upper()} ---\n{agent_payload}\n"
+
+        # 3. Trigger the ADK Brain Agent
+        try:
+             synthesis = await self.brain.synthesize(data_dump)
+             return {
+                 "status": "success",
+                 "payloads": payloads,
+                 "synthesis": synthesis,
+                 "errors": []
+             }
+        except Exception as e:
+             return {
+                 "status": "success",
+                 "payloads": payloads,
+                 "synthesis": f"⚠️ Synthesis failed: {e}",
+                 "errors": [f"Grand Synthesis: {e}"]
+             }

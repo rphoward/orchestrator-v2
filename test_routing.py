@@ -49,7 +49,8 @@ class TestSemanticDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.messages), 2)
         self.assertEqual(len(self.session.routing_logs), 1)
         self.assertEqual(self.session.routing_logs[0].agent_id, 1) # Default mock fallback for 'brand'
-        self.assertIn("MOCK brand_spine", response)
+        self.assertIn("MOCK brand_spine", response["response"])
+        self.assertEqual(response["routing_reason"], "Mock routing: Default fallback")
 
     @patch('config.get_secure_api_key')
     @patch('google.genai.models.Models.generate_content')
@@ -91,7 +92,7 @@ class TestSemanticDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(log.reason, "User is asking about their target audience.")
 
         # Verify that the generated response correctly came from the mocked Client using Agent 3
-        self.assertIn("MOCK customer_reality", response)
+        self.assertIn("MOCK customer_reality", response["response"])
 
 if __name__ == '__main__':
     unittest.main()

@@ -51,12 +51,28 @@ from model_registry import (
 )
 
 # ── Layer 3: Agent Communication ──────────────────────────────────
-from agent import load_prompt, invalidate_prompt_cache
+# (Legacy imports removed)
 
 # ── Layer 4: Session Workflows ────────────────────────────────────
-from session_ops import (
-    route_and_send, send_manual, initialize_agents, finalize_session
-)
+import asyncio
+from Infrastructure.repositories import SQLiteSessionRepository, SQLiteAgentRepository
+from Infrastructure.Swarm.agents import DomainAgent
+from Infrastructure.Swarm.dispatcher import SwarmDispatcher
+
+# Initialize Repositories and Swarm
+session_repo = SQLiteSessionRepository()
+agent_repo = SQLiteAgentRepository()
+
+def _build_dispatcher():
+    """Lazily load agents with current prompts from the repository."""
+    agents_dict = {}
+    for a in agent_repo.get_all():
+        if not a.is_synthesizer:
+            prompt = agent_repo.get_system_prompt_for_agent(a.id)
+            # Ensure name is a valid python identifier for ADK
+            clean_name = a.name.lower().replace(" ", "_")
+            agents_dict[a.id] = DomainAgent(agent_id=a.id, name=clean_name, system_prompt=prompt, model_id=a.model)
+    return SwarmDispatcher(agents=agents_dict)
 
 
 app = Flask(__name__, static_folder="static")
@@ -153,15 +169,24 @@ def api_send(session_id):
         }), 400
 
     try:
-        result = route_and_send(session_id, msg)
+        # Load Aggregate Root
+        session = session_repo.get_by_id(session_id)
+        if not session:
+             return jsonify({"error": "Session not found", "error_type": "validation_error"}), 404
+
+        # Route and Send using V2 Swarm Dispatcher
+        dispatcher = _build_dispatcher()
+        result = asyncio.run(dispatcher.process_input(session, msg))
         
         # Smart Session Renaming
-        session = get_session(session_id)
-        if session and session["name"].startswith("Interview "):
+        if session.name.startswith("Interview "):
             new_title = msg[:25] + ("..." if len(msg) > 25 else "")
-            update_session(session_id, new_title)
+            session.name = new_title
             result["session_renamed"] = new_title
             
+        # Save mutated Aggregate Root
+        session_repo.save(session)
+
         return jsonify(result)
     except OrchestratorError as e:
         return error_response(e)
@@ -175,6 +200,7 @@ def api_send_manual(session_id):
         return jsonify({"error": "Missing parameters", "error_type": "validation_error"}), 400
 
     msg = data["message"].strip()
+    agent_id = data["agent_id"]
 
     if len(msg) > MAX_MESSAGE_LENGTH:
         return jsonify({
@@ -183,7 +209,29 @@ def api_send_manual(session_id):
         }), 400
 
     try:
-        return jsonify(send_manual(session_id, data["agent_id"], msg))
+        session = session_repo.get_by_id(session_id)
+        if not session:
+            return jsonify({"error": "Session not found", "error_type": "validation_error"}), 404
+
+        dispatcher = _build_dispatcher()
+        agent = dispatcher.muscle_agents.get(agent_id)
+        if not agent:
+            return jsonify({"error": f"Agent {agent_id} not found", "error_type": "agent_not_found"}), 404
+
+        history = session.messages[-5:] if session.messages else []
+
+        # Async invocation
+        response = asyncio.run(agent.generate_response(msg, history=history))
+
+        session.add_message(agent_id=agent_id, role="user", content=msg)
+        session.add_message(agent_id=agent_id, role="assistant", content=response)
+        session_repo.save(session)
+
+        return jsonify({
+            "agent_id": agent_id,
+            "agent_name": agent.name,
+            "response": response
+        })
     except OrchestratorError as e:
         return error_response(e)
     except Exception as e:
@@ -191,8 +239,39 @@ def api_send_manual(session_id):
 
 @app.route("/api/sessions/<int:session_id>/initialize", methods=["POST"])
 def api_initialize(session_id):
+    """
+    Sends the opening instruction to all active Muscle Agents.
+    """
     try:
-        results = initialize_agents(session_id)
+        session = session_repo.get_by_id(session_id)
+        if not session:
+             return jsonify({"error": "Session not found", "error_type": "validation_error"}), 404
+
+        dispatcher = _build_dispatcher()
+        results = {}
+
+        init_message = (
+            "You are helping a friendly, approachable business consultant who works "
+            "with small business owners — not corporate executives. Keep the vibe warm, professional, "
+            "and encouraging.\n\n"
+            "Begin the session. Provide your opening output using your "
+            "required format, including your first suggested question "
+            "for the consultant to ask the founder."
+        )
+
+        async def init_all():
+            for agent_id, agent in dispatcher.muscle_agents.items():
+                try:
+                    response = await agent.generate_response(init_message)
+                    session.add_message(agent_id=agent_id, role="system", content=init_message, message_type="init")
+                    session.add_message(agent_id=agent_id, role="assistant", content=response, message_type="init")
+                    results[agent_id] = response
+                except Exception as e:
+                    results[agent_id] = f"⚠️ Failed to initialize: {e}"
+
+        asyncio.run(init_all())
+        session_repo.save(session)
+
         return jsonify({"status": "ok", "agents": results})
     except OrchestratorError as e:
         return error_response(e)
@@ -203,7 +282,13 @@ def api_initialize(session_id):
 def api_finalize(session_id):
     data = request.json or {}
     try:
-        return jsonify(finalize_session(session_id, force=data.get("force", False)))
+        session = session_repo.get_by_id(session_id)
+        if not session:
+             return jsonify({"error": "Session not found", "error_type": "validation_error"}), 404
+
+        dispatcher = _build_dispatcher()
+        result = asyncio.run(dispatcher.finalize_session(session, force=data.get("force", False)))
+        return jsonify(result)
     except OrchestratorError as e:
         return error_response(e)
     except Exception as e:
@@ -211,13 +296,58 @@ def api_finalize(session_id):
 
 @app.route("/api/sessions/<int:session_id>/conversations", methods=["GET"])
 def api_get_conversations(session_id):
+    session = session_repo.get_by_id(session_id)
+    if not session:
+        return jsonify([])
+
     agent_id = request.args.get("agent_id", type=int)
-    if agent_id: return jsonify(get_conversation(session_id, agent_id))
-    return jsonify(get_all_conversations(session_id))
+
+    # We must match the V1 format for the frontend exactly
+    formatted_messages = []
+    dispatcher = _build_dispatcher()
+
+    for msg in session.messages:
+         if agent_id and msg.agent_id != agent_id:
+             continue
+
+         agent = dispatcher.muscle_agents.get(msg.agent_id)
+         agent_name = agent.name if agent else f"Agent {msg.agent_id}"
+
+         formatted_messages.append({
+             "id": str(msg.id), # UUID to string
+             "session_id": session.id,
+             "agent_id": msg.agent_id,
+             "agent_name": agent_name,
+             "role": msg.role,
+             "content": msg.content,
+             "message_type": msg.message_type,
+             "timestamp": msg.timestamp.isoformat()
+         })
+
+    return jsonify(formatted_messages)
 
 @app.route("/api/sessions/<int:session_id>/routing-logs", methods=["GET"])
 def api_routing_logs(session_id):
-    return jsonify(get_routing_logs(session_id, request.args.get("limit", 20, type=int)))
+    session = session_repo.get_by_id(session_id)
+    if not session:
+        return jsonify([])
+
+    limit = request.args.get("limit", 20, type=int)
+
+    formatted_logs = []
+    # Reverse to show newest first, up to limit
+    for log in reversed(session.routing_logs[-limit:]):
+        formatted_logs.append({
+            "id": str(log.id),
+            "session_id": session.id,
+            "input_text": log.input_text,
+            "agent_id": log.agent_id,
+            "agent_name": log.agent_name,
+            "reason": log.reason,
+            "timestamp": log.timestamp.isoformat()
+        })
+
+    return jsonify(formatted_logs)
 
 
 # ── Model Registry API ────────────────────────────────────────────
@@ -247,7 +377,9 @@ def api_save_models():
 def api_get_agents():
     agents = get_all_agents()
     for agent in agents:
-        try: agent["prompt"] = load_prompt(agent["prompt_file"])
+        try:
+            with open(os.path.join(PROMPTS_DIR, agent["prompt_file"]), "r", encoding="utf-8") as f:
+                agent["prompt"] = f.read()
         except FileNotFoundError: agent["prompt"] = "(Prompt file not found)"
     return jsonify(agents)
 
@@ -281,10 +413,8 @@ def api_update_agent(agent_id):
                 with open(prompt_path, "w", encoding="utf-8") as f:
                     f.write(data["prompt"])
                 
-                # ── REFACTOR #5: Invalidate the cached prompt ──
-                # The agent's prompt just changed on disk. Clear the cache
-                # entry so the next send_to_agent() picks up the new version.
-                invalidate_prompt_cache(agent["prompt_file"])
+                # In V2, prompts are loaded directly via SQLiteAgentRepository,
+                # so the file write above is sufficient. No cache invalidation needed.
                 
             except IOError as e:
                 return jsonify({"error": f"Failed to save prompt: {str(e)}", "error_type": "unknown_error"}), 500
@@ -351,7 +481,9 @@ def api_temperature(agent_id):
 def api_export_config():
     agents = get_all_agents()
     for agent in agents:
-        try: agent["prompt"] = load_prompt(agent["prompt_file"])
+        try:
+            with open(os.path.join(PROMPTS_DIR, agent["prompt_file"]), "r", encoding="utf-8") as f:
+                agent["prompt"] = f.read()
         except FileNotFoundError: agent["prompt"] = ""
     return jsonify(agents)
 
@@ -369,9 +501,6 @@ def api_import_config():
                     continue
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(ad["prompt"])
-        
-        # Clear entire prompt cache after import — multiple prompts may have changed
-        invalidate_prompt_cache()
         
         return jsonify({"status": "ok"})
     except Exception as e: return jsonify({"error": str(e), "error_type": "unknown_error"}), 500
