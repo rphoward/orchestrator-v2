@@ -43,3 +43,8 @@ class AgentRepository(ABC):
     @abstractmethod
     def save(self, agent: Agent) -> Agent:
         pass
+
+    @abstractmethod
+    def get_system_prompt_for_agent(self, agent_id: int) -> str:
+        """Fetches the Agent entity and loads its actual prompt content."""
+        pass

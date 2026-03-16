@@ -15,11 +15,27 @@ class TestSemanticDispatcher(unittest.IsolatedAsyncioTestCase):
 
         # 2. Setup Swarm Infrastructure (Muscle Agents)
         # Note: ADK agent names must be valid python identifiers (no spaces)
+        # Using a mock repository to simulate loading real prompts
+        from Infrastructure.Repositories.sqlite_session_repo import SQLiteAgentRepository
+
+        self.repo = SQLiteAgentRepository()
+
+        # Ensure database is initialized before tests access the repo
+        from database import init_db, seed_agents
+        init_db()
+        seed_agents()
+
+        # We manually fetch the prompts from the actual prompts directory for the test
+        brand_prompt = self.repo.get_system_prompt_for_agent(1)
+        founder_prompt = self.repo.get_system_prompt_for_agent(2)
+        customer_prompt = self.repo.get_system_prompt_for_agent(3)
+        architecture_prompt = self.repo.get_system_prompt_for_agent(4)
+
         self.agents = {
-            1: DomainAgent(agent_id=1, name="brand_spine", system_prompt="You are Brand Spine."),
-            2: DomainAgent(agent_id=2, name="founder_invariants", system_prompt="You are Founder."),
-            3: DomainAgent(agent_id=3, name="customer_reality", system_prompt="You are Customer."),
-            4: DomainAgent(agent_id=4, name="architecture_translation", system_prompt="You are Architecture.")
+            1: DomainAgent(agent_id=1, name="brand_spine", system_prompt=brand_prompt),
+            2: DomainAgent(agent_id=2, name="founder_invariants", system_prompt=founder_prompt),
+            3: DomainAgent(agent_id=3, name="customer_reality", system_prompt=customer_prompt),
+            4: DomainAgent(agent_id=4, name="architecture_translation", system_prompt=architecture_prompt)
         }
 
         # 3. Setup Dispatcher
