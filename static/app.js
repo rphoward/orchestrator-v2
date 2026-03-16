@@ -149,8 +149,7 @@ async function selectSession(id, name) {
 }
 
 async function startNewSession() {
-    // Intentionally omitting showStatus() here to prevent the UI from vertically jumping
-    // when the "Creating and initializing session..." banner appears and disappears.
+    showStatus('Creating and initializing session...');
     try {
         const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({}) });
         currentSessionId = res.id;
@@ -162,15 +161,15 @@ async function startNewSession() {
         document.getElementById('finalizeBtn').disabled = false;
 
         await loadSessions();
-        await loadThread(1);
         await loadRoutingLogs();
+        hideStatus();
         
-        // Ensure the analytical response block is completely hidden on a fresh session.
-        // The user only needs to see the initial agent greeting in the chat thread.
-        // Hiding this entirely prevents the UI from violently jumping due to empty regex matches.
-        document.getElementById('responseSection').classList.add('hidden');
-
-    } catch (err) { showError("Failed to create session"); }
+        if (initRes.agents && initRes.agents['1']) {
+            displayResponse({
+                agent_id: 1, agent_name: 'Brand Spine', routing_reason: 'Session initialized', response: initRes.agents['1']
+            });
+        }
+    } catch (err) { showError("Failed to create session"); hideStatus(); }
 }
 
 async function deleteSession(event, id) {
@@ -231,7 +230,6 @@ async function handleSend(e) {
             : await api(`/api/sessions/${currentSessionId}/send-manual`, { method: 'POST', body: JSON.stringify({ agent_id: selectedAgentId, message }) });
 
         displayResponse(result);
-        await loadThread(result.agent_id || selectedAgentId);
         await loadRoutingLogs();
         
         if(result.session_renamed) {
@@ -243,29 +241,35 @@ async function handleSend(e) {
 }
 
 function displayResponse(result) {
-    const responseSec = document.getElementById('responseSection');
-    // Ensure the animation triggers on subsequent messages by re-adding the class
-    responseSec.classList.remove('fade-in');
-    void responseSec.offsetWidth; // Trigger DOM reflow to restart animation
-    responseSec.classList.add('fade-in');
-    responseSec.classList.remove('hidden');
-
+    document.getElementById('responseSection').classList.remove('hidden');
     const agentId = result.agent_id || selectedAgentId;
     document.getElementById('routeIcon').textContent = AGENT_ICONS[agentId] || '🤖';
     document.getElementById('routeAgent').textContent = `Routed to: ${result.agent_name || 'Agent ' + agentId}`;
-
-    const reasonEl = document.getElementById('routeReason');
-    if (result.routing_reason && result.routing_reason !== 'Session initialized') {
-        reasonEl.textContent = result.routing_reason;
-        reasonEl.style.display = 'block';
-    } else {
-        reasonEl.style.display = 'none';
-    }
+    document.getElementById('routeReason').textContent = result.routing_reason || '';
 
     const parsed = parseAgentResponse(result.response || '');
     document.getElementById('nextQuestion').innerHTML = formatMarkdown(parsed.question || 'No specific question suggested.');
-    document.getElementById('analysisContent').innerHTML = formatMarkdown(parsed.analysis || 'No analysis provided.');
-    document.getElementById('pivotContent').innerHTML = formatMarkdown(parsed.pivot || 'No tactical pivot provided.');
+
+    // ── PATCH: Only show analysis/pivot boxes if they have real content ──
+    const analysisEl = document.getElementById('analysisContent').closest('details');
+    const pivotEl = document.getElementById('pivotContent').closest('details');
+
+    if (parsed.analysis) {
+        analysisEl.style.display = '';
+        analysisEl.removeAttribute('open');  // collapsed by default
+        document.getElementById('analysisContent').innerHTML = formatMarkdown(parsed.analysis);
+    } else {
+        analysisEl.style.display = 'none';   // hide entirely
+    }
+
+    if (parsed.pivot) {
+        pivotEl.style.display = '';
+        pivotEl.removeAttribute('open');
+        document.getElementById('pivotContent').innerHTML = formatMarkdown(parsed.pivot);
+    } else {
+        pivotEl.style.display = 'none';
+    }
+
     showThread(agentId);
 }
 

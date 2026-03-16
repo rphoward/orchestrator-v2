@@ -1,23 +1,7 @@
 from typing import List, Optional, Literal
 from datetime import datetime, UTC
 from pydantic import BaseModel, Field
-class Message(BaseModel):
-    """Value Object representing a single conversation utterance."""
-    id: Optional[int] = None
-    agent_id: int
-    role: Literal["user", "assistant", "system"]
-    content: str
-    message_type: Literal["chat", "init", "summary"] = "chat"
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-class RoutingLog(BaseModel):
-    """Value Object recording a routing decision."""
-    id: Optional[int] = None
-    input_text: str
-    agent_id: int
-    agent_name: str
-    reason: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+from .entities import Message, RoutingLog
 
 class InterviewSession(BaseModel):
     """
