@@ -161,7 +161,10 @@ async function startNewSession() {
         document.getElementById('finalizeBtn').disabled = false;
 
         await loadSessions();
-        await loadThread(1);
+        // loadThread is NOT called here — displayResponse() below
+        // calls showThread(1) → loadThread(1) internally.
+        // Calling it twice caused the DOM to rebuild identically,
+        // producing a visible flicker and duplicate GET requests.
         await loadRoutingLogs();
         hideStatus();
         
@@ -231,7 +234,8 @@ async function handleSend(e) {
             : await api(`/api/sessions/${currentSessionId}/send-manual`, { method: 'POST', body: JSON.stringify({ agent_id: selectedAgentId, message }) });
 
         displayResponse(result);
-        await loadThread(result.agent_id || selectedAgentId);
+        // loadThread is NOT called here — displayResponse() calls
+        // showThread() → loadThread() internally. Same fix as Patch B.
         await loadRoutingLogs();
         
         if(result.session_renamed) {
@@ -251,8 +255,27 @@ function displayResponse(result) {
 
     const parsed = parseAgentResponse(result.response || '');
     document.getElementById('nextQuestion').innerHTML = formatMarkdown(parsed.question || 'No specific question suggested.');
-    document.getElementById('analysisContent').innerHTML = formatMarkdown(parsed.analysis || 'No analysis provided.');
-    document.getElementById('pivotContent').innerHTML = formatMarkdown(parsed.pivot || 'No tactical pivot provided.');
+
+    // Patch A: Only show analysis/pivot boxes when they have content.
+    // On init messages, parseAgentResponse() finds no 🧠 or 🎯 sections,
+    // so these would render as empty visible boxes causing layout reflow.
+    const analysisDetails = document.getElementById('analysisContent').closest('details');
+    const pivotDetails = document.getElementById('pivotContent').closest('details');
+
+    if (parsed.analysis) {
+        document.getElementById('analysisContent').innerHTML = formatMarkdown(parsed.analysis);
+        if (analysisDetails) { analysisDetails.style.display = ''; analysisDetails.removeAttribute('open'); }
+    } else {
+        if (analysisDetails) analysisDetails.style.display = 'none';
+    }
+
+    if (parsed.pivot) {
+        document.getElementById('pivotContent').innerHTML = formatMarkdown(parsed.pivot);
+        if (pivotDetails) { pivotDetails.style.display = ''; pivotDetails.removeAttribute('open'); }
+    } else {
+        if (pivotDetails) pivotDetails.style.display = 'none';
+    }
+
     showThread(agentId);
 }
 

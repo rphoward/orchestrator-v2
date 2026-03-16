@@ -1,133 +1,247 @@
+"""
+Infrastructure/Swarm/dispatcher.py — Swarm Dispatcher
+══════════════════════════════════════════════════════
+The semantic load-balancer. Routes user input to the right DomainAgent.
+
+RESPONSIBILITIES:
+  1. Build and cache the agent swarm (DomainAgent instances)
+  2. Route user input via Gemini structured-output
+  3. Dispatch execution to the selected agent
+  4. Provide the Grand Synthesis agent for finalization
+
+CACHE-ASIDE PATTERN (replaces the separate dispatcher_cache.py from patches):
+  The dispatcher builds agents from the DB once and caches them.
+  When agent config changes (prompt edit, model change, config import),
+  call invalidate() to force a rebuild on the next request.
+  This eliminates ~20 DB queries per user interaction.
+
+WHO CALLS ME:
+  - session_ops.py → get_dispatcher(), route(), dispatch()
+
+WHAT I IMPORT:
+  - Infrastructure.Swarm.agents   → DomainAgent, GrandSynthesisAgent
+  - Infrastructure.repositories   → SQLiteAgentRepository
+  - errors                        → typed error classes
+  - google.genai                  → Gemini API (for routing only)
+  - model_registry                → router model config
+"""
+
 import os
-from typing import Dict, Any, Literal
-from pydantic import BaseModel, Field
-from Domain.interview_session import InterviewSession
-from Infrastructure.Swarm.agents import DomainAgent, GrandSynthesisAgent
+import json
+import threading
+from typing import Dict, Optional
+
+from google import genai
 from google.genai import types
-from config import get_secure_api_key
+from pydantic import BaseModel, Field
+from typing import Literal
+
+from Infrastructure.Swarm.agents import DomainAgent, GrandSynthesisAgent, classify_api_error
+from Infrastructure.repositories import SQLiteAgentRepository
+from model_registry import get_router_model, get_model_config
+from errors import (
+    RoutingError, APIKeyError, RateLimitError, ModelError
+)
+
+
+# ── Routing Decision Schema ──────────────────────────────────────
+# Gemini returns this as structured JSON output.
 
 class RoutingDecision(BaseModel):
     """Structured output expected from the Semantic Router."""
-    agent_id: Literal[1, 2, 3, 4] = Field(description="The ID of the specialized agent to handle the user's input: 1 for Brand/Mission, 2 for Founder/Personal Constraints, 3 for Customer/User needs, 4 for Architecture/Tech Stack.")
-    reason: str = Field(description="A short explanation of why this agent was chosen.")
+    agent_id: Literal[1, 2, 3, 4] = Field(
+        description=(
+            "The ID of the specialized agent to handle the user's input: "
+            "1 for Brand/Mission, 2 for Founder/Personal Constraints, "
+            "3 for Customer/User needs, 4 for Architecture/Tech Stack."
+        )
+    )
+    reason: str = Field(
+        description="A short explanation of why this agent was chosen."
+    )
+
+
+# ── Routing Directive ────────────────────────────────────────────
+# The system prompt that tells the router how to classify input.
+
+ROUTING_DIRECTIVE = """You are an interview routing engine. Analyze the consultant's input and determine which specialized agent should handle it.
+
+AGENTS AND THEIR DOMAINS:
+Agent 1 - BRAND SPINE: Identity, purpose, culture, employee behavior, differentiation, competition.
+Agent 2 - FOUNDER INVARIANTS: Absolute rules, boundaries, constraints, past failures, compliance.
+Agent 3 - CUSTOMER REALITY: Why customers buy, their struggles, workarounds, success metrics.
+Agent 4 - ARCHITECTURE TRANSLATION: Operational processes, terminology, step-by-step workflows.
+
+RULES:
+- If the input is a greeting or general opener, route to Agent 1 (Brand Spine).
+- Respond with ONLY a JSON object: {"agent_id": <number>, "reason": "<brief explanation>"}
+"""
+
 
 class SwarmDispatcher:
     """
-    Dispatcher: The semantic load-balancer.
-    Manages the OODA+S (Observe, Orient, Decide, Act, Sync) execution loop.
-    We inject the native ADK Agents (Muscle/Brain).
+    The Dispatcher: semantic load-balancer for the agent swarm.
+
+    Manages the OODA+S execution loop:
+      Observe → Orient → Decide (route) → Act (agent execute) → Sync (persist)
+
+    Includes the cache-aside pattern: agents are built once from DB,
+    then served from cache until invalidated.
     """
-    def __init__(self, agents: Dict[int, DomainAgent]):
-        self.muscle_agents = agents
-        self.brain = GrandSynthesisAgent()
 
-        # If we had access to ADK's native `Router` or `AgentTeam` components,
-        # we would initialize them here. Given the current documentation provided,
-        # we will use the existing `genai` semantic structured output logic
-        # to ensure deterministic mapping, but execute using ADK agents.
-        from google import genai
-        # Read API key explicitly and securely from the local .env to prevent terminal leakage
-        api_key = get_secure_api_key()
-        self._client = genai.Client(api_key=api_key)
-        self.routing_model = "gemini-3.1-flash-lite-preview"
-
-    async def process_input(self, session: InterviewSession, user_input: str) -> str:
+    def __init__(self):
         """
-        Executes the OODA+S Loop.
-        1. Observe: Ingest the input and session state.
-        2. Orient: Load necessary context.
-        3. Decide: Use semantic routing.
-        4. Act: Execute the prompt using the ADK Muscle Agent.
-        5. Sync: Write back to the Domain Entity.
+        Builds the agent swarm from the database.
+        Called once, then cached at module level via get_dispatcher().
         """
-        # 1. Observe
-        session_id = session.id
-        current_messages = session.messages
+        self._agent_repo = SQLiteAgentRepository()
+        self.muscle_agents: Dict[int, DomainAgent] = {}
+        self.brain: Optional[GrandSynthesisAgent] = None
 
-        # 2. Orient
-        history_context = current_messages[-5:] if current_messages else []
+        # Load all agent configs from DB and create DomainAgent instances
+        agent_configs = self._agent_repo.get_all()
 
-        # 3. Decide (Semantic Routing)
-        decision = self._route(user_input, history_context)
-        selected_agent_id = decision.agent_id
-        selected_agent = self.muscle_agents.get(selected_agent_id)
+        for config in agent_configs:
+            if config.is_synthesizer:
+                # Agent 5: Grand Synthesis (Brain)
+                self.brain = GrandSynthesisAgent(
+                    agent_id=config.id,
+                    name=config.name,
+                    prompt_file=config.prompt_file,
+                    model_id=config.model,
+                )
+            else:
+                # Agents 1-4: Domain Agents (Muscle)
+                self.muscle_agents[config.id] = DomainAgent(
+                    agent_id=config.id,
+                    name=config.name,
+                    prompt_file=config.prompt_file,
+                    model_id=config.model,
+                )
 
-        if not selected_agent:
-            selected_agent_id = 1
-            selected_agent = self.muscle_agents.get(1)
-            decision.reason = f"Fallback routing due to missing agent {decision.agent_id}"
+        # Fallback: if no brain was found in DB, create default
+        if not self.brain:
+            self.brain = GrandSynthesisAgent()
 
-        session.log_routing_decision(
-            input_text=user_input,
-            agent_id=selected_agent_id,
-            agent_name=selected_agent.name,
-            reason=decision.reason
-        )
-
-        # 4. Act (Trigger ADK Agent)
-        response = await selected_agent.generate_response(user_input, history=history_context)
-
-        # 5. Sync
-        session.add_message(agent_id=selected_agent_id, role="user", content=user_input)
-        session.add_message(agent_id=selected_agent_id, role="assistant", content=response)
-
-        return response
-
-    def _route(self, user_input: str, history: list) -> RoutingDecision:
+    def route(self, user_input):
         """
-        Semantic Router powered by Gemini Structured Outputs.
+        Semantic routing: classifies user input → agent_id + reason.
+
+        Uses Gemini structured output for deterministic JSON responses.
+        Falls back to Agent 1 on any parse failure (conversation must
+        never stall).
+
+        Returns: dict with 'id' and 'reason' keys
+        Raises:  APIKeyError, RateLimitError, ModelError (infra problems)
         """
-        # If in a testing mock environment where the real model is patched, don't fallback to string matching
-        # Wait until the patched mock executes
-        if get_secure_api_key() == "mock_key" and not getattr(self, "_testing_live", False):
-            lower_input = user_input.lower()
-            if "founder" in lower_input or "personal" in lower_input:
-                 return RoutingDecision(agent_id=2, reason="Mock routing: Founder keyword detected")
-            elif "customer" in lower_input or "user" in lower_input:
-                 return RoutingDecision(agent_id=3, reason="Mock routing: Customer keyword detected")
-            elif "architecture" in lower_input or "tech" in lower_input or "system" in lower_input:
-                 return RoutingDecision(agent_id=4, reason="Mock routing: Architecture keyword detected")
-            return RoutingDecision(agent_id=1, reason="Mock routing: Default fallback")
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise APIKeyError(
+                "GEMINI_API_KEY is not set. Check your .env file."
+            )
 
-        prompt = (
-            "You are the Swarm Dispatcher. Analyze the latest user input and the recent conversation history.\n"
-            "Route the input to one of the following Domain Agents:\n"
-            "1: Brand Spine (Mission, Vision, Voice, Values)\n"
-            "2: Founder Invariants (Personal constraints, time, capital, goals)\n"
-            "3: Customer Reality (Target audience, pain points, market)\n"
-            "4: Architecture Translation (Tech stack, systems, scalability)\n\n"
-        )
-        if history:
-             prompt += "Recent History:\n"
-             for msg in history:
-                  prompt += f"{msg.role.upper()}: {msg.content}\n"
+        client = genai.Client(api_key=api_key)
+        model_name = get_router_model()
 
-        prompt += f"\nLatest User Input: {user_input}\n"
+        # Build config — router always uses minimal thinking for speed
+        config_kwargs = {
+            "response_mime_type": "application/json",
+            "temperature": 0.1
+        }
 
-        config = types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=RoutingDecision,
-            temperature=0.0,
-        )
+        model_config = get_model_config(model_name)
+        if model_config and model_config.get("supports_thinking"):
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_level=types.ThinkingLevel.MINIMAL
+            )
 
-        response = self._client.models.generate_content(
-            model=self.routing_model,
-            contents=prompt,
-            config=config,
-        )
-
-        import json
         try:
-             parsed = json.loads(response.text)
-             return RoutingDecision(**parsed)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[{
+                    "role": "user",
+                    "parts": [{
+                        "text": (
+                            f"{ROUTING_DIRECTIVE}\n\n"
+                            f"Consultant's input: \"{user_input}\""
+                        )
+                    }]
+                }],
+                config=types.GenerateContentConfig(**config_kwargs)
+            )
         except Exception as e:
-             return RoutingDecision(agent_id=1, reason=f"Fallback parsing error: {str(e)}")
+            raise classify_api_error(e)
 
-    async def finalize_session(self, session: InterviewSession) -> str:
-        data_dump = ""
-        for msg in session.messages:
-             data_dump += f"[{msg.role.upper()} - Agent {msg.agent_id}]: {msg.content}\n"
+        # Parse the router's JSON response
+        try:
+            decision = json.loads(response.text)
+            agent_id = int(decision.get("agent_id", decision.get("id", 1)))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return {
+                "id": 1,
+                "reason": "Default routing (unparseable router response)"
+            }
 
-        # Trigger the ADK Brain Agent
-        synthesis = await self.brain.synthesize(data_dump)
-        return synthesis
+        # Clamp to valid range
+        if agent_id < 1 or agent_id > 4:
+            agent_id = 1
+
+        return {
+            "id": agent_id,
+            "reason": decision.get("reason", "Routed by AI")
+        }
+
+    def get_agent(self, agent_id):
+        """Returns a DomainAgent by ID, or None if not found."""
+        if agent_id == 5 or (hasattr(self.brain, 'agent_id') and agent_id == self.brain.agent_id):
+            return self.brain
+        return self.muscle_agents.get(agent_id)
+
+    def get_muscle_agents(self):
+        """Returns dict of non-synthesizer agents {id: DomainAgent}."""
+        return self.muscle_agents
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MODULE-LEVEL CACHE (replaces dispatcher_cache.py)
+# ═══════════════════════════════════════════════════════════════════
+# The dispatcher is expensive to build (DB queries + prompt loads).
+# Cache it at module level. Thread-safe via Lock.
+
+_dispatcher_cache: Optional[SwarmDispatcher] = None
+_cache_lock = threading.Lock()
+
+
+def get_dispatcher() -> SwarmDispatcher:
+    """
+    Returns the cached SwarmDispatcher, building it if needed.
+    Thread-safe: uses a lock so concurrent Flask requests don't
+    race to build multiple dispatchers simultaneously.
+    """
+    global _dispatcher_cache
+
+    if _dispatcher_cache is not None:
+        return _dispatcher_cache
+
+    with _cache_lock:
+        # Double-check inside lock (another thread may have built it)
+        if _dispatcher_cache is not None:
+            return _dispatcher_cache
+
+        _dispatcher_cache = SwarmDispatcher()
+        return _dispatcher_cache
+
+
+def invalidate_dispatcher():
+    """
+    Clears the cached dispatcher. Call this when agent config changes:
+      - Prompt edited via Settings
+      - Model changed via Settings
+      - Config imported
+
+    The next get_dispatcher() call will rebuild from the DB.
+    """
+    global _dispatcher_cache
+
+    with _cache_lock:
+        _dispatcher_cache = None
