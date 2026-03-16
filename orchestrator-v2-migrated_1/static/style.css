@@ -1,0 +1,231 @@
+/*
+ * Interview Orchestrator - Styles
+ * Aesthetic Maturation: Warm Consultant Palette
+ */
+
+:root {
+    --color-bg:       #FDF8F5;
+    --color-card:     #FFFFFF;
+    --color-border:   #E2D9CD;
+    --color-teal:     #1A3626;
+    --color-teal-light: #EAEFEC;
+    --color-text:     #1C1C1C;
+    --color-muted:    #6B6256;
+    --color-danger:   #DC2626;
+}
+
+body {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-weight: 400;
+}
+
+.card {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 1rem;
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 4px 10px rgba(43, 38, 32, 0.04);
+}
+
+.btn-primary {
+    background: var(--color-teal);
+    color: white;
+    padding: 0.5rem 1.25rem;
+    border-radius: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.btn-primary:hover { filter: brightness(1.15); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+
+.btn-secondary {
+    background: var(--color-card);
+    color: var(--color-text);
+    padding: 0.5rem 1.25rem;
+    border-radius: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.btn-secondary:hover { background: var(--color-bg); }
+
+.btn-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-card);
+    color: var(--color-text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    transition: all 0.15s;
+}
+.btn-icon:hover { background: var(--color-bg); }
+
+.section-label {
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-muted);
+}
+
+.input-area {
+    width: 100%;
+    border: 1px solid var(--color-border);
+    border-radius: 0.75rem;
+    padding: 0.875rem 3.5rem 0.875rem 1rem;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    resize: none;
+    background: var(--color-bg);
+    color: var(--color-text);
+    transition: all 0.15s;
+    font-family: inherit;
+}
+.input-area:focus { outline: none; border-color: var(--color-teal); background: var(--color-card); box-shadow: 0 0 0 3px rgba(26,54,38,0.1); }
+.input-area::placeholder { color: var(--color-muted); opacity: 0.7; }
+
+.send-button {
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    background: var(--color-teal);
+    color: white;
+    border: none;
+    border-radius: 0.75rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.875rem;
+    transition: all 0.15s;
+}
+.send-button:hover { filter: brightness(1.2); }
+.send-button:disabled { opacity: 0.3; cursor: not-allowed; filter: none; }
+
+.agent-tab {
+    padding: 0.375rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border: 1px solid var(--color-border);
+    background: var(--color-card);
+    color: var(--color-text);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.agent-tab:hover { background: var(--color-teal-light); color: var(--color-teal); }
+.agent-tab.active { background: var(--color-teal); color: white; border-color: var(--color-teal); }
+
+.thread-tab {
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem 0.5rem 0 0;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border: none;
+    background: transparent;
+    color: var(--color-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+}
+.thread-tab:hover { color: var(--color-text); }
+.thread-tab.active { color: var(--color-teal); border-bottom-color: var(--color-teal); }
+
+.thread-container { max-height: 400px; overflow-y: auto; }
+.thread-message { padding: 0.75rem 1rem; margin-bottom: 0.5rem; border-radius: 0.75rem; font-size: 0.8125rem; line-height: 1.6; }
+.thread-message.user { background: var(--color-teal-light); border: 1px solid rgba(26, 54, 38, 0.15); margin-left: 2rem; color: var(--color-text); }
+.thread-message.model { background: var(--color-bg); border: 1px solid var(--color-border); margin-right: 2rem; color: var(--color-text); }
+.thread-message .role-label { font-size: 0.625rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; display: block; }
+.thread-message.user .role-label { color: var(--color-teal); }
+.thread-message.model .role-label { color: var(--color-muted); }
+
+.collapsible-header { font-size: 0.75rem; font-weight: 700; color: var(--color-muted); padding: 0.5rem 0; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 0.375rem; transition: color 0.15s; }
+.collapsible-header:hover { color: var(--color-text); }
+.collapsible-header::marker, .collapsible-header::-webkit-details-marker { display: none; }
+.collapsible-header::before { content: "▸ "; font-size: 0.625rem; }
+details[open] > .collapsible-header::before { content: "▾ "; }
+.collapsible-body { font-size: 0.8125rem; line-height: 1.7; color: var(--color-text); padding: 0.75rem 1rem; background: var(--color-card); border-radius: 0.5rem; border: 1px solid var(--color-border); margin-bottom: 0.5rem; white-space: pre-wrap; }
+
+.routing-entry { padding: 0.5rem 0.75rem; background: var(--color-card); border-radius: 0.5rem; border: 1px solid var(--color-border); font-size: 0.75rem; }
+.routing-entry .route-agent { font-weight: 800; color: var(--color-teal); }
+
+.modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+.modal.hidden { display: none; }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(43, 38, 32, 0.6); backdrop-filter: blur(4px); }
+.modal-content { position: relative; background: var(--color-card); border-radius: 1.5rem; padding: 1.5rem 2rem; width: 100%; max-width: 48rem; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(43, 38, 32, 0.2); }
+
+.agent-config-card { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 0.75rem; padding: 1rem 1.25rem; }
+.agent-config-card input, .agent-config-card select, .agent-config-card textarea { width: 100%; border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; font-size: 0.8125rem; background: var(--color-card); font-family: inherit; }
+.agent-config-card input:focus, .agent-config-card select:focus, .agent-config-card textarea:focus { outline: none; border-color: var(--color-teal); }
+
+/* ── NEW: Model Registry Maintenance Cards ── */
+.registry-model-card {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+}
+.registry-model-card input,
+.registry-model-card select {
+    border: 1px solid var(--color-border);
+    border-radius: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    font-size: 0.75rem;
+    background: var(--color-bg);
+    font-family: inherit;
+}
+.registry-model-card input:focus,
+.registry-model-card select:focus {
+    outline: none;
+    border-color: var(--color-teal);
+    background: var(--color-card);
+}
+/* Compact checkbox styling for the registry cards */
+.registry-model-card input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    accent-color: var(--color-teal);
+}
+/* Number inputs in registry need a fixed width */
+.registry-model-card input[type="number"] {
+    width: 4rem;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(139, 130, 118, 0.3); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(139, 130, 118, 0.6); }
+
+/* Patch D: Smooth transition for the response section.
+   Instead of an instant DOM pop, the card slides in over 300ms.
+   This replaces the jarring flash when responseSection goes from hidden → visible. */
+@keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+#responseSection:not(.hidden) {
+    animation: fadeSlideIn 300ms ease-out;
+}
+
+.spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid white; border-right-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.prose h3 { font-size: 1rem; font-weight: 800; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--color-teal); }
+.prose h4 { font-size: 0.875rem; font-weight: 700; margin-top: 1rem; margin-bottom: 0.375rem; }
+.prose p { margin-bottom: 0.75rem; }
+.prose ul { padding-left: 1.5rem; margin-bottom: 0.75rem; list-style-type: disc; }
+.prose li { margin-bottom: 0.375rem; }
+.prose strong { font-weight: 700; }
