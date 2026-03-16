@@ -1,5 +1,6 @@
 import os
 from google.adk.agents.llm_agent import Agent
+from config import get_secure_api_key
 
 class DomainAgent(Agent):
     """
@@ -23,8 +24,8 @@ class DomainAgent(Agent):
         """
         Executes the ADK Agent asynchronously.
         """
-        # Prioritize GEMINI_API_KEY if testing live routing, fallback to GOOGLE_API_KEY
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "mock_key")
+        # Securely read from .env ONLY, avoiding global terminal state.
+        api_key = get_secure_api_key()
         if api_key == "mock_key":
             return f"[MOCK {self.name}] Acknowledged: '{user_input}'. Please elaborate."
 
@@ -56,7 +57,7 @@ class GrandSynthesisAgent(Agent):
         )
 
     async def synthesize(self, session_data: str) -> str:
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "mock_key")
+        api_key = get_secure_api_key()
         if api_key == "mock_key":
              return "[MOCK SYNTHESIS] Architecture specified based on all inputs."
 

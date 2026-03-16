@@ -1,8 +1,8 @@
 import unittest
 import os
 from datetime import datetime, UTC
-from Domain.Session.aggregate import InterviewSession
-from Infrastructure.Repositories.sqlite_session_repo import SQLiteSessionRepository, SQLiteAgentRepository
+from Domain.interview_session import InterviewSession
+from Infrastructure.repositories import SQLiteSessionRepository, SQLiteAgentRepository
 from database import init_db, seed_agents
 
 class TestSQLiteRepositories(unittest.TestCase):

@@ -1,13 +1,62 @@
 import os
 import sqlite3
+from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, UTC
-from Domain.Session.aggregate import InterviewSession
-from Domain.Session.entities import Message, RoutingLog
-from Domain.Core.entities import Agent
-from Infrastructure.Repositories.interfaces import SessionRepository, AgentRepository
+from Domain.interview_session import InterviewSession, Message, RoutingLog
+from Domain.system_config import Agent
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "orchestrator.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "orchestrator.db")
+
+# --- INTERFACES ---
+
+class SessionRepository(ABC):
+    """
+    Interface for the InterviewSession Aggregate Root.
+    The Infrastructure layer MUST implement this without leaking DB details.
+    """
+
+    @abstractmethod
+    def save(self, session: InterviewSession) -> InterviewSession:
+        """Persists the ENTIRE aggregate root (session + messages + logs) atomically."""
+        pass
+
+    @abstractmethod
+    def get_by_id(self, session_id: int) -> Optional[InterviewSession]:
+        """Rehydrates the aggregate root from persistence."""
+        pass
+
+    @abstractmethod
+    def list_all(self) -> List[InterviewSession]:
+        """Returns all sessions, typically without full child-entity hydration for performance."""
+        pass
+
+    @abstractmethod
+    def delete(self, session_id: int) -> None:
+        """Deletes the entire session aggregate."""
+        pass
+
+class AgentRepository(ABC):
+    """Interface for managing Swarm Agents."""
+
+    @abstractmethod
+    def get_all(self) -> List[Agent]:
+        pass
+
+    @abstractmethod
+    def get_by_id(self, agent_id: int) -> Optional[Agent]:
+        pass
+
+    @abstractmethod
+    def save(self, agent: Agent) -> Agent:
+        pass
+
+    @abstractmethod
+    def get_system_prompt_for_agent(self, agent_id: int) -> str:
+        """Fetches the Agent entity and loads its actual prompt content."""
+        pass
+
+# --- CONCRETE IMPLEMENTATIONS ---
 
 class SQLiteSessionRepository(SessionRepository):
     """
@@ -41,7 +90,7 @@ class SQLiteSessionRepository(SessionRepository):
                     (session.name, session.updated_at, session.id)
                 )
 
-            # 2. Save Messages (Only new ones, or delete/recreate. Since they are append-only, we can just insert based on count, but for true DDD, recreating or upserting based on a unique ID is safer. However, since our DB schema uses auto-incrementing integer IDs and our Domain uses UUIDs, we will do a simple delete-and-replace for the child entities to guarantee the aggregate state perfectly matches memory. This is standard for small aggregates).
+            # 2. Save Messages (Delete and replace to guarantee aggregate state matches memory)
             cursor.execute("DELETE FROM conversations WHERE session_id = ?", (session.id,))
             for msg in session.messages:
                 cursor.execute(
@@ -146,7 +195,7 @@ class SQLiteAgentRepository(AgentRepository):
     """
 
     def __init__(self):
-        self.prompts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "prompts")
+        self.prompts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
 
     def _get_db(self):
         conn = sqlite3.connect(DB_PATH)
