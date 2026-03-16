@@ -209,6 +209,17 @@ details[open] > .collapsible-header::before { content: "▾ "; }
 ::-webkit-scrollbar-thumb { background: rgba(139, 130, 118, 0.3); border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(139, 130, 118, 0.6); }
 
+/* Patch D: Smooth transition for the response section.
+   Instead of an instant DOM pop, the card slides in over 300ms.
+   This replaces the jarring flash when responseSection goes from hidden → visible. */
+@keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+#responseSection:not(.hidden) {
+    animation: fadeSlideIn 300ms ease-out;
+}
+
 .spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid white; border-right-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

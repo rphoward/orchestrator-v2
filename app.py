@@ -1,23 +1,14 @@
 """
-app.py - Interview Orchestrator Web Server
-═══════════════════════════════════════════
-LAYER 5 (the roof) — Flask routes, HTTP ↔ logic.
+app.py - Interview Orchestrator Web Server (V2)
+═══════════════════════════════════════════════
+Flask routes, HTTP ↔ domain logic.
 
-REFACTOR #3: Typed Error Handling
-  Orchestration endpoints now catch specific error types and return
-  appropriate HTTP status codes with an 'error_type' field the
-  frontend can use to show targeted messages:
-    - APIKeyError    → 401 + "api_key_error"
-    - RateLimitError → 429 + "rate_limit_error"  
-    - ModelError     → 502 + "model_error"
-    - AgentNotFoundError → 404 + "agent_not_found"
-    - ValidationError → 400 + "validation_error"
-    - OrchestratorError → 500 + "orchestrator_error" (catch-all)
+ARCHITECTURE (Hybrid DDD):
+  app.py → session_ops.py → SwarmDispatcher + DomainAgents
+                           → database.py (granular CRUD)
+                           → Infrastructure/repositories (aggregate ops)
 
-REFACTOR #5: Prompt Cache Invalidation
-  When a prompt is saved through Settings, app.py calls
-  invalidate_prompt_cache() so the next agent call picks up
-  the new prompt from disk instead of using the stale cache.
+  V1 files (agent.py, router.py, legacy session_ops.py) are in legacy/.
 """
 
 import os
@@ -27,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Layer 1: Database ─────────────────────────────────────────────
+# ── Database (bootstrap + granular CRUD) ─────────────────────────
 from database import (
     init_db, seed_agents,
     get_agents, get_all_agents, get_agent, update_agent,
@@ -36,13 +27,13 @@ from database import (
     create_session, get_sessions, delete_session, get_session, update_session
 )
 
-# ── Layer 1: Errors ───────────────────────────────────────────────
+# ── Errors ────────────────────────────────────────────────────────
 from errors import (
     OrchestratorError, APIKeyError, RateLimitError,
     ModelError, AgentNotFoundError, ValidationError, AIResponseError
 )
 
-# ── Layer 2: Model Registry ──────────────────────────────────────
+# ── Model Registry ───────────────────────────────────────────────
 from model_registry import (
     load_model_registry_from_file, get_model_registry, save_model_registry,
     get_router_model, set_router_model,
@@ -50,10 +41,11 @@ from model_registry import (
     get_temperature, set_temperature
 )
 
-# ── Layer 3: Agent Communication ──────────────────────────────────
-from agent import load_prompt, invalidate_prompt_cache
+# ── Swarm Layer (V2) ─────────────────────────────────────────────
+from Infrastructure.Swarm.agents import load_prompt, invalidate_prompt_cache
+from Infrastructure.Swarm.dispatcher import invalidate_dispatcher
 
-# ── Layer 4: Session Workflows ────────────────────────────────────
+# ── Session Workflows (V2) ───────────────────────────────────────
 from session_ops import (
     route_and_send, send_manual, initialize_agents, finalize_session
 )
@@ -117,6 +109,24 @@ def index(): return send_from_directory("static", "index.html")
 def serve_static(filename): return send_from_directory("static", filename)
 
 
+# ── API Key Guard (Patch 5) ──────────────────────────────────────
+# Prevents empty/broken responses from polluting session data
+# when the API key is intentionally absent during development.
+
+def require_api_key():
+    """
+    Returns a 401 JSON response if GEMINI_API_KEY is not set.
+    Call at the top of any endpoint that makes Gemini API calls.
+    Returns None if the key is present (safe to proceed).
+    """
+    if not os.getenv("GEMINI_API_KEY"):
+        return jsonify({
+            "error": "GEMINI_API_KEY is not configured. Check your .env file.",
+            "error_type": "api_key_error"
+        }), 401
+    return None
+
+
 # ── Session API ──────────────────────────────────────────────────
 
 @app.route("/api/sessions", methods=["GET"])
@@ -140,6 +150,9 @@ def api_delete_session(session_id):
 
 @app.route("/api/sessions/<int:session_id>/send", methods=["POST"])
 def api_send(session_id):
+    guard = require_api_key()
+    if guard: return guard
+
     data = request.json
     if not data or not data.get("message", "").strip():
         return jsonify({"error": "No message provided", "error_type": "validation_error"}), 400
@@ -170,6 +183,9 @@ def api_send(session_id):
 
 @app.route("/api/sessions/<int:session_id>/send-manual", methods=["POST"])
 def api_send_manual(session_id):
+    guard = require_api_key()
+    if guard: return guard
+
     data = request.json
     if not data or not data.get("message", "").strip() or not data.get("agent_id"):
         return jsonify({"error": "Missing parameters", "error_type": "validation_error"}), 400
@@ -191,6 +207,10 @@ def api_send_manual(session_id):
 
 @app.route("/api/sessions/<int:session_id>/initialize", methods=["POST"])
 def api_initialize(session_id):
+    # NO api key guard here. initialize_agents() handles missing keys
+    # gracefully per-agent, so the UI still transitions to the
+    # conversation view and shows error messages in each panel.
+    # This matters during dev when the key is intentionally absent.
     try:
         results = initialize_agents(session_id)
         return jsonify({"status": "ok", "agents": results})
@@ -263,6 +283,9 @@ def api_update_agent(agent_id):
         data.get("model", "gemini-3.1-flash-lite-preview")
     )
 
+    # Model or name changed — invalidate dispatcher so it rebuilds
+    invalidate_dispatcher()
+
     if "prompt" in data:
         agent = get_agent(agent_id)
         if agent:
@@ -281,10 +304,12 @@ def api_update_agent(agent_id):
                 with open(prompt_path, "w", encoding="utf-8") as f:
                     f.write(data["prompt"])
                 
-                # ── REFACTOR #5: Invalidate the cached prompt ──
-                # The agent's prompt just changed on disk. Clear the cache
-                # entry so the next send_to_agent() picks up the new version.
+                # ── Invalidate caches ──
+                # The agent's prompt/model just changed. Clear both the
+                # prompt cache and the dispatcher cache so the next
+                # request picks up the new version.
                 invalidate_prompt_cache(agent["prompt_file"])
+                invalidate_dispatcher()
                 
             except IOError as e:
                 return jsonify({"error": f"Failed to save prompt: {str(e)}", "error_type": "unknown_error"}), 500
@@ -370,8 +395,9 @@ def api_import_config():
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(ad["prompt"])
         
-        # Clear entire prompt cache after import — multiple prompts may have changed
+        # Clear all caches after import — prompts and agent configs may have changed
         invalidate_prompt_cache()
+        invalidate_dispatcher()
         
         return jsonify({"status": "ok"})
     except Exception as e: return jsonify({"error": str(e), "error_type": "unknown_error"}), 500
