@@ -165,11 +165,11 @@ async function startNewSession() {
         await loadThread(1);
         await loadRoutingLogs();
         
-        if (initRes.agents && initRes.agents['1']) {
-            displayResponse({
-                agent_id: 1, agent_name: 'brand_spine', routing_reason: 'Session initialized', response: initRes.agents['1']
-            });
-        }
+        // Ensure the analytical response block is completely hidden on a fresh session.
+        // The user only needs to see the initial agent greeting in the chat thread.
+        // Hiding this entirely prevents the UI from violently jumping due to empty regex matches.
+        document.getElementById('responseSection').classList.add('hidden');
+
     } catch (err) { showError("Failed to create session"); }
 }
 
@@ -243,7 +243,13 @@ async function handleSend(e) {
 }
 
 function displayResponse(result) {
-    document.getElementById('responseSection').classList.remove('hidden');
+    const responseSec = document.getElementById('responseSection');
+    // Ensure the animation triggers on subsequent messages by re-adding the class
+    responseSec.classList.remove('fade-in');
+    void responseSec.offsetWidth; // Trigger DOM reflow to restart animation
+    responseSec.classList.add('fade-in');
+    responseSec.classList.remove('hidden');
+
     const agentId = result.agent_id || selectedAgentId;
     document.getElementById('routeIcon').textContent = AGENT_ICONS[agentId] || '🤖';
     document.getElementById('routeAgent').textContent = `Routed to: ${result.agent_name || 'Agent ' + agentId}`;

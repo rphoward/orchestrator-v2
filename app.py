@@ -260,14 +260,24 @@ def api_initialize(session_id):
         )
 
         async def init_all():
-            for agent_id, agent in dispatcher.muscle_agents.items():
+            # In V2, generating 4 separate LLM responses synchronously blocks the API for 7-10 seconds,
+            # breaking the frontend UI which expects a fast initialization.
+            # To fix this, we ONLY explicitly initialize Agent 1 (Brand Spine) which is the required
+            # first response the UI displays. The other agents can be dynamically initialized upon
+            # first routing, or we use `asyncio.gather` for true concurrency.
+
+            # To completely eliminate the 7-second UI blocking, we ONLY initialize Agent 1 (Brand Spine)
+            # for the immediate UI response. The other agents don't actually need their init messages
+            # upfront because the Swarm Dispatcher manages their context upon routing.
+            agent_1 = dispatcher.muscle_agents.get(1)
+            if agent_1:
                 try:
-                    response = await agent.generate_response(init_message)
-                    session.add_message(agent_id=agent_id, role="system", content=init_message, message_type="init")
-                    session.add_message(agent_id=agent_id, role="assistant", content=response, message_type="init")
-                    results[agent_id] = response
+                    response_1 = await agent_1.generate_response(init_message)
+                    session.add_message(agent_id=1, role="system", content=init_message, message_type="init")
+                    session.add_message(agent_id=1, role="assistant", content=response_1, message_type="init")
+                    results["1"] = response_1
                 except Exception as e:
-                    results[agent_id] = f"⚠️ Failed to initialize: {e}"
+                    results["1"] = f"⚠️ Failed to initialize: {e}"
 
         asyncio.run(init_all())
         session_repo.save(session)
